@@ -52,10 +52,12 @@ def build_hourly_stats(
 ) -> tuple[list[dict[str, Any]], float, datetime | None]:
     """Convierte puntos `H` en filas de estadística con suma acumulada.
 
-    Ignora la energía reactiva y las horas que no son posteriores a `after` (ya
-    importadas). Devuelve las filas, la suma final y el inicio de la última hora.
+    Ignora la energía reactiva, las horas que no son posteriores a `after` (ya importadas)
+    y las repetidas. Devuelve las filas, la suma final y el inicio de la última hora.
     """
-    hours: list[tuple[datetime, float]] = []
+    # Por hora de inicio: si UTE repite una hora (en una respuesta o entre pedidos que se
+    # solapan) cuenta una sola vez, con el último valor recibido.
+    by_start: dict[datetime, float] = {}
     for p in points:
         if p.magnitude != MAGNITUDE_ACTIVE:
             continue
@@ -65,8 +67,8 @@ def build_hourly_stats(
         start = day + timedelta(hours=p.period - 1)
         if after is not None and start <= after:
             continue
-        hours.append((start, p.value))
-    hours.sort()
+        by_start[start] = p.value
+    hours = sorted(by_start.items())
 
     rows: list[dict[str, Any]] = []
     total = start_sum
