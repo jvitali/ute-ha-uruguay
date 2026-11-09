@@ -25,6 +25,7 @@ from .models import (
     Account,
     BillingPeriodSummary,
     ConsumptionTOU,
+    CurvePoint,
     Device,
     DeviceStatus,
     Service,
@@ -306,6 +307,30 @@ class UteClient:
         url = f"{API_BASE}/accounts/{service_point_id}/calculateConsumptionForPlan/{plan}/{date_from}/{date_to}"
         r = await self._get(url)
         return [ConsumptionTOU.from_json(x) for x in r.json()]
+
+    async def consumption_curve(
+        self,
+        service_point_id: str,
+        granularity: str,
+        date_from: str,
+        date_to: str,
+    ) -> list[CurvePoint]:
+        """Curva de consumo del medidor inteligente (lo que grafica "Mi consumo" en la app).
+
+        `granularity`: `H` (por hora) o `D` (por día). Fechas `YYYY-MM-DD`, ambas
+        inclusive. Trae energía activa (`IMPORT_ACTIVE_ENERGY`, kWh, 3 decimales) y
+        reactiva (`Q1_REACTIVE_ENERGY`). Sólo para suministros con AMI; los datos llegan
+        con ~1 día de atraso y hay al menos un año de historia. Un mes por hora entra en
+        un pedido.
+        """
+        url = (
+            f"{API_BASE}/accounts/miConsumptionCurve/{service_point_id}/"
+            f"{granularity}/{date_from}/{date_to}"
+        )
+        r = await self._get(url)
+        if r.status_code == 204 or not r.text.strip():
+            return []
+        return [CurvePoint.from_json(x) for x in r.json()]
 
     async def billing_period_summary(self, account_id: str) -> BillingPeriodSummary:
         """Resumen del período de facturación corriente: kWh + UYU.
