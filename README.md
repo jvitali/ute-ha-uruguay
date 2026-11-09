@@ -34,7 +34,7 @@ Por **suministro con medidor inteligente** (AMI), además, una estadística exte
 
 ### Energy Dashboard
 
-Para el consumo de red usá la estadística **"UTE consumo por hora"** (Energía → Red eléctrica → Agregar consumo) **en lugar de** `consumo_del_periodo`: con los dos, el consumo se cuenta doble. Cada hora queda en su hora real, así que no hay picos al cambiar el período de facturación (el sensor `consumo_del_periodo` vuelve a cero en cada ciclo y HA suma de golpe los primeros días del período nuevo). `potencia_instantanea` del Shelly sirve como consumo individual.
+Para el consumo de red usá la estadística **"UTE consumo por hora"** (Energía → Red eléctrica → Agregar consumo) **en lugar de** `consumo_del_periodo` y `consumo_total`: con más de uno, el consumo se cuenta doble. Con una estadística importada HA no calcula el costo con un precio por kWh (eso sólo funciona con sensores); si usás el costo en Energía, tenelo en cuenta antes de cambiar. Cada hora queda en su hora real, así que no hay picos al cambiar el período de facturación (el sensor `consumo_del_periodo` vuelve a cero en cada ciclo y HA suma de golpe los primeros días del período nuevo). `potencia_instantanea` del Shelly sirve como consumo individual.
 
 ## Instalación
 
