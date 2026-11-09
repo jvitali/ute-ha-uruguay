@@ -202,11 +202,18 @@ def test_metadata_follows_ha_version() -> None:
 
     from custom_components.ute_uruguay.consumption_statistics import _metadata
 
+    fields = set(StatisticMetaData.__annotations__)
     meta = _metadata("ute_uruguay:x", "X")
-    assert "unit_class" in meta and "mean_type" in meta and "has_mean" not in meta
+    # Con los campos de la versión instalada: nunca uno que no exista.
+    assert set(meta) <= fields | {"has_mean"}
+    assert ("mean_type" in meta) == ("mean_type" in fields)
+    assert ("unit_class" in meta) == ("unit_class" in fields)
+    assert ("has_mean" in meta) == ("mean_type" not in fields)
 
-    # Simular HA 2025.x: mean_type sí, unit_class no.
+    # Simular versiones anteriores quitando campos (sólo tiene sentido si existen).
     original = StatisticMetaData.__annotations__
+    if "mean_type" not in original:
+        return
     try:
         StatisticMetaData.__annotations__ = {k: v for k, v in original.items() if k != "unit_class"}
         meta = _metadata("ute_uruguay:x", "X")
