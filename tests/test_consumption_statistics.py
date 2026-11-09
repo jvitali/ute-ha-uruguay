@@ -218,3 +218,61 @@ def test_metadata_follows_ha_version() -> None:
         assert meta["has_mean"] is False and "mean_type" not in meta
     finally:
         StatisticMetaData.__annotations__ = original
+
+
+def test_duplicate_hours_counted_once() -> None:
+    """Una hora repetida en la respuesta (o en pedidos solapados) se cuenta una sola vez."""
+    day = _day_points(date(2026, 11, 4), 0.5)
+    repeated = day + day[:10]  # UTE devuelve de nuevo las primeras horas
+    rows, total, _ = build_hourly_stats(repeated, None, 0.0)
+    assert len(rows) == 24
+    assert total == 12.0
+    assert len({r["start"] for r in rows}) == 24
+
+
+async def test_rerunning_is_idempotent(recorder_mock: Recorder, hass: HomeAssistant) -> None:
+    """Correr el importador varias veces sin datos nuevos no cambia nada."""
+    today = dt_util.now().date()
+    client = FakeClient(available_until=today - timedelta(days=1))
+    importer = ConsumptionImporter(hass, _coordinator(client))
+    with patch("custom_components.ute_uruguay.consumption_statistics.BACKFILL_DAYS", 5), patch(
+        "custom_components.ute_uruguay.consumption_statistics.asyncio.sleep"
+    ):
+        totals = []
+        for _ in range(4):
+            await importer.async_run()
+            await async_wait_recording_done(hass)
+            rows = await _stats(hass)
+            totals.append((len(rows), rows[-1]["sum"]))
+    assert totals == [(5 * 24, 5 * 24 * 0.5)] * 4
+
+
+async def test_overlapping_chunks_counted_once(
+    recorder_mock: Recorder, hass: HomeAssistant
+) -> None:
+    """Si UTE devuelve días de más (fuera del rango pedido), no se duplican."""
+    today = dt_util.now().date()
+
+    class OverlappingClient(FakeClient):
+        async def consumption_curve(self, sp, granularity, date_from, date_to):
+            # Devuelve también el día anterior al pedido, que ya vino en el pedido previo.
+            prev = (date.fromisoformat(date_from) - timedelta(days=1)).isoformat()
+            return await super().consumption_curve(sp, granularity, prev, date_to)
+
+    client = OverlappingClient(available_until=today - timedelta(days=1))
+    importer = ConsumptionImporter(hass, _coordinator(client))
+    with patch("custom_components.ute_uruguay.consumption_statistics.BACKFILL_DAYS", 40), patch(
+        "custom_components.ute_uruguay.consumption_statistics.asyncio.sleep"
+    ):
+        await importer.async_run()
+        await async_wait_recording_done(hass)
+    from homeassistant.components.recorder import get_instance
+
+    last = await get_instance(hass).async_add_executor_job(
+        get_last_statistics, hass, 1, statistic_id(SP), False, {"sum"}
+    )
+    # Días distintos recibidos: del día anterior al primer pedido (today-41) a ayer = 41.
+    # El día que se repite entre los dos tramos de 30 días no se cuenta dos veces (serían 42).
+    assert last[statistic_id(SP)][0]["sum"] == 41 * 24 * 0.5
+    rows = await _stats(hass)
+    assert len({r["start"] for r in rows}) == len(rows)
