@@ -283,3 +283,43 @@ async def test_overlapping_chunks_counted_once(
     assert last[statistic_id(SP)][0]["sum"] == 41 * 24 * 0.5
     rows = await _stats(hass)
     assert len({r["start"] for r in rows}) == len(rows)
+
+
+def test_empty_and_future_hours_skipped() -> None:
+    """Horas sin medir (value None) o todavía en curso no se importan."""
+    pts = _day_points(date(2026, 11, 4), 0.5)
+    pts[0].value = None  # 00:00 sin medir
+    now = dt_util.now()
+    today = now.date()
+    future = _day_points(today, 0.5)  # incluye horas que todavía no terminaron
+    rows, total, _ = build_hourly_stats(pts + future, None, 0.0)
+    starts = {r["start"] for r in rows}
+    assert datetime.fromisoformat("2026-11-04T00:00:00-03:00") not in starts
+    assert all(s + timedelta(hours=1) <= dt_util.utcnow() for s in starts)
+
+
+async def test_backfill_tolerates_rejected_old_chunks(
+    recorder_mock: Recorder, hass: HomeAssistant
+) -> None:
+    """Si UTE rechaza los tramos más viejos (medidor nuevo), la carga inicial sigue igual."""
+    from custom_components.ute_uruguay.api import UteApiError
+
+    today = dt_util.now().date()
+    meter_since = today - timedelta(days=20)
+
+    class NewMeterClient(FakeClient):
+        async def consumption_curve(self, sp, granularity, date_from, date_to):
+            if date.fromisoformat(date_from) < meter_since:
+                raise UteApiError("GET ... → 400: fecha anterior al medidor")
+            return await super().consumption_curve(sp, granularity, date_from, date_to)
+
+    client = NewMeterClient(available_until=today - timedelta(days=1))
+    importer = ConsumptionImporter(hass, _coordinator(client))
+    with patch("custom_components.ute_uruguay.consumption_statistics.BACKFILL_DAYS", 70), patch(
+        "custom_components.ute_uruguay.consumption_statistics.asyncio.sleep"
+    ):
+        await importer.async_run()
+        await async_wait_recording_done(hass)
+    rows = await _stats(hass)
+    assert rows, "la carga inicial no debe trabarse por los tramos viejos"
+    assert rows[-1]["sum"] > 0
