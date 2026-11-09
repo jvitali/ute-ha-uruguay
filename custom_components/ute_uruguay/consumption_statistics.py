@@ -7,8 +7,10 @@ barra muestra lo que UTE informó ese día, no lo consumido.
 
 Acá se usa `miConsumptionCurve` con granularidad `H`: cada hora queda en su hora real, con
 3 decimales. La estadística `ute_uruguay:consumo_horario_<servicePoint>` se puede elegir en
-Energía → Red eléctrica → Consumo. La primera vez se cargan `BACKFILL_DAYS` hacia atrás;
-después, cada `IMPORT_INTERVAL`, sólo las horas posteriores a la última importada.
+Energía → Red eléctrica → Consumo (en lugar de `consumo_del_periodo`; con los dos, el
+consumo se contaría doble). La primera vez se cargan `BACKFILL_DAYS` hacia atrás; después,
+cada `IMPORT_INTERVAL`, las horas nuevas, reescribiendo además las últimas `REFRESH_HOURS`
+por si UTE publicó o corrigió alguna tarde.
 """
 
 from __future__ import annotations
@@ -34,6 +36,9 @@ _LOGGER = logging.getLogger(__name__)
 IMPORT_INTERVAL = timedelta(hours=3)
 BACKFILL_DAYS = 365
 CHUNK_DAYS = 30  # un mes por hora entra en un solo pedido
+# Cada corrida vuelve a pedir y reescribe las últimas horas importadas: UTE puede publicar
+# una hora tarde o corregirla.
+REFRESH_HOURS = 72
 MAGNITUDE_ACTIVE = "IMPORT_ACTIVE_ENERGY"
 
 
@@ -79,13 +84,23 @@ def _metadata(stat_id: str, name: str) -> dict[str, Any]:
         "statistic_id": stat_id,
         "unit_of_measurement": "kWh",
     }
-    try:  # HA 2025.10+: mean_type y unit_class reemplazan a has_mean
+    # Los campos cambiaron entre versiones: `mean_type` reemplazó a `has_mean` en 2025 y
+    # `unit_class` apareció en 2026.1. Un campo de más hace fallar el insert
+    # (`StatisticsMeta(**meta)`), así que se manda sólo lo que esta versión conoce.
+    try:
+        from homeassistant.components.recorder.models import StatisticMetaData
+
+        fields = set(StatisticMetaData.__annotations__)
+    except ImportError:
+        fields = set()
+    if "mean_type" in fields:
         from homeassistant.components.recorder.models import StatisticMeanType
 
         meta["mean_type"] = StatisticMeanType.NONE
-        meta["unit_class"] = "energy"
-    except ImportError:
+    else:
         meta["has_mean"] = False
+    if "unit_class" in fields:
+        meta["unit_class"] = "energy"
     return meta
 
 
@@ -141,17 +156,22 @@ class ConsumptionImporter:
         stat_id = statistic_id(svc.service_point_id)
         name = f"UTE consumo por hora ({svc.short_address or svc.service_point_id})"
         last = await get_instance(self._hass).async_add_executor_job(
-            get_last_statistics, self._hass, 1, stat_id, False, {"sum"}
+            get_last_statistics, self._hass, REFRESH_HOURS + 1, stat_id, False, {"sum"}
         )
         today = dt_util.now().date()
-        if rows := last.get(stat_id):
-            after: datetime | None = dt_util.utc_from_timestamp(rows[0]["start"])
-            total = float(rows[0].get("sum") or 0.0)
-            # Volver a pedir el día de la última hora: puede haber quedado incompleto.
+        rows = last.get(stat_id) or []  # de la más nueva a la más vieja
+        if rows:
+            # Ancla: la hora anterior a la ventana que se reescribe; su suma se mantiene.
+            anchor = rows[-1]
+            after: datetime | None = dt_util.utc_from_timestamp(anchor["start"])
+            total = float(anchor.get("sum") or 0.0)
             day: date = dt_util.as_local(after).date()
+            existing = {dt_util.utc_from_timestamp(r["start"]) for r in rows[:-1]}
+            newest = (dt_util.utc_from_timestamp(rows[0]["start"]), float(rows[0].get("sum") or 0.0))
         else:
             after, total = None, 0.0
             day = today - timedelta(days=BACKFILL_DAYS)
+            existing, newest = set(), None
 
         imported = 0
         while day <= today:
@@ -159,7 +179,15 @@ class ConsumptionImporter:
             points = await client.consumption_curve(
                 svc.service_point_id, "H", day.isoformat(), end.isoformat()
             )
-            stats, total, after = build_hourly_stats(points, after, total)
+            stats, new_total, new_after = build_hourly_stats(points, after, total)
+            if existing and newest is not None:
+                # Reescribir la ventana sólo si UTE volvió a mandar todas las horas que ya
+                # estaban; si falta alguna, sumas viejas y nuevas quedarían mezcladas. En ese
+                # caso, sólo agregar lo posterior a la última hora importada.
+                if not existing <= {r["start"] for r in stats}:
+                    stats, new_total, new_after = build_hourly_stats(points, newest[0], newest[1])
+                existing = set()
+            total, after = new_total, new_after
             if stats:
                 async_add_external_statistics(self._hass, _metadata(stat_id, name), stats)
                 imported += len(stats)

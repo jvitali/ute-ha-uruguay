@@ -30,11 +30,11 @@ Por **Shelly UTE** (Calefón, A/C, etc.):
 - `binary_sensor.<nombre>_bypass` (deshabilitado por defecto)
 
 Por **suministro con medidor inteligente** (AMI), además, una estadística externa:
-- `ute_uruguay:consumo_horario_<servicePoint>` — consumo **por hora** (kWh, 3 decimales) con su hora real, tomado de la curva del medidor ("Mi consumo" en la app). La primera vez se importa un año hacia atrás; después se actualiza cada 3 horas. UTE publica los datos con ~1 día de atraso.
+- `ute_uruguay:consumo_horario_<servicePoint>` — consumo **por hora** (kWh, 3 decimales) con su hora real, tomado de la curva del medidor ("Mi consumo" en la app). La primera vez se importa un año hacia atrás; después se actualiza cada 3 horas, reescribiendo las últimas 72 horas por si UTE publicó o corrigió alguna tarde. UTE publica los datos con ~1 día de atraso.
 
 ### Energy Dashboard
 
-Para el consumo de red usá la estadística **"UTE consumo por hora"** (Energía → Red eléctrica → Agregar consumo). Cada hora queda en su hora real, así que no hay picos al cambiar el período de facturación (el sensor `consumo_del_periodo` vuelve a cero en cada ciclo y HA suma de golpe los primeros días del período nuevo). `potencia_instantanea` del Shelly sirve como consumo individual.
+Para el consumo de red usá la estadística **"UTE consumo por hora"** (Energía → Red eléctrica → Agregar consumo) **en lugar de** `consumo_del_periodo`: con los dos, el consumo se cuenta doble. Cada hora queda en su hora real, así que no hay picos al cambiar el período de facturación (el sensor `consumo_del_periodo` vuelve a cero en cada ciclo y HA suma de golpe los primeros días del período nuevo). `potencia_instantanea` del Shelly sirve como consumo individual.
 
 ## Instalación
 
