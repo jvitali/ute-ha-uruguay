@@ -166,7 +166,7 @@ class CurvePoint:
 
     date: str
     period: int
-    value: float
+    value: float | None  # None: hora todavía sin medir
     label: str
     magnitude: str  # IMPORT_ACTIVE_ENERGY (kWh) | Q1_REACTIVE_ENERGY (kvarh)
 
@@ -175,7 +175,7 @@ class CurvePoint:
         return cls(
             date=data["date"],
             period=int(data.get("period") or 1),
-            value=float(data.get("value") or 0.0),
+            value=None if data.get("value") is None else float(data["value"]),
             label=str(data.get("label") or ""),
             magnitude=str(data.get("magnitudeVO") or ""),
         )

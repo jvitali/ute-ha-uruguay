@@ -58,13 +58,18 @@ def build_hourly_stats(
     # Por hora de inicio: si UTE repite una hora (en una respuesta o entre pedidos que se
     # solapan) cuenta una sola vez, con el último valor recibido.
     by_start: dict[datetime, float] = {}
+    now = dt_util.utcnow()
     for p in points:
         if p.magnitude != MAGNITUDE_ACTIVE:
             continue
         day = dt_util.parse_datetime(p.date)
-        if day is None:
+        if day is None or p.value is None:
             continue
+        # Horas transcurridas desde la medianoche local (con su offset). Uruguay hoy no tiene
+        # horario de verano; si volviera, habría que confirmar cómo numera UTE el día de 23/25 h.
         start = day + timedelta(hours=p.period - 1)
+        if start + timedelta(hours=1) > now:
+            continue  # hora en curso o futura: todavía no está completa
         if after is not None and start <= after:
             continue
         by_start[start] = p.value
@@ -140,7 +145,7 @@ class ConsumptionImporter:
                     if not sd.service.ami_present:
                         continue
                     try:
-                        await self._async_import_service(client, sd.service)
+                        await self._async_import_service(sd.service)
                     except Exception as e:  # noqa: BLE001 — se reintenta en la próxima corrida
                         _LOGGER.warning(
                             "No se pudo importar la curva horaria de sp=%s: %s",
@@ -148,8 +153,10 @@ class ConsumptionImporter:
                             e,
                         )
 
-    async def _async_import_service(self, client: Any, svc: Service) -> None:
+    async def _async_import_service(self, svc: Service) -> None:
         from homeassistant.components.recorder import get_instance
+
+        from .api import UteApiError
         from homeassistant.components.recorder.statistics import (
             async_add_external_statistics,
             get_last_statistics,
@@ -178,9 +185,22 @@ class ConsumptionImporter:
         imported = 0
         while day <= today:
             end = min(day + timedelta(days=CHUNK_DAYS - 1), today)
-            points = await client.consumption_curve(
-                svc.service_point_id, "H", day.isoformat(), end.isoformat()
-            )
+            # Leído en cada tramo: si la integración se descarga o se vuelve a loguear, el
+            # cliente anterior queda cerrado.
+            if (client := self._coordinator.client) is None:
+                return
+            try:
+                points = await client.consumption_curve(
+                    svc.service_point_id, "H", day.isoformat(), end.isoformat()
+                )
+            except UteApiError as e:
+                if rows or imported:
+                    raise
+                # Carga inicial: UTE puede rechazar fechas anteriores al medidor (suministro o
+                # medidor nuevo). Seguir con el tramo siguiente.
+                _LOGGER.debug("Sin curva para sp=%s %s..%s: %s", svc.service_point_id, day, end, e)
+                day = end + timedelta(days=1)
+                continue
             stats, new_total, new_after = build_hourly_stats(points, after, total)
             if existing and newest is not None:
                 # Reescribir la ventana sólo si UTE volvió a mandar todas las horas que ya
