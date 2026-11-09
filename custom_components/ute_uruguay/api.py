@@ -4,8 +4,9 @@ Implementa el flujo completo capturado de la app v1.0.40:
 1. Bootstrap zero-secret via /customersapp/customers/setup.
 2. Login ROPC (resource owner password) contra identityserver.ute.com.uy.
 3. Refresh token automático con lock para evitar carrera.
-4. Endpoints: accounts, services, consumption-by-TOU, status, deuda,
-   facturas impagas, devices Shelly UTE + status en vivo.
+4. Endpoints: accounts, services, consumption-by-TOU, curva de consumo
+   por hora/día, status, deuda, facturas impagas, devices Shelly UTE +
+   status en vivo.
 
 Este cliente NO inyecta secrets ni telemetría falsa; usa exactamente lo que
 la app móvil hace.
